@@ -1,55 +1,64 @@
-import re
+import os
+import json
+import readline
+import requests
+from dotenv import load_dotenv
+load_dotenv()
 
-# Définition des slots à remplir
-slots = {
-    "nom": None,
-    "date": None,
-    "lieu": None,
-    "produit": None,
-    "intention": None
-}
+AI_TOKEN = os.getenv("AI_API_TOKEN")
+AI_PRODUCT_ID = os.getenv("AI_PRODUCT_ID")
+print(AI_PRODUCT_ID)
+AI_URL = f"https://api.infomaniak.com/1/ai/{AI_PRODUCT_ID}/openai/chat/completions"
 
-# Fonctions simples pour détecter les entités
-def detect_nom(text):
-    match = re.search(r"je m'appelle (\w+)", text, re.IGNORECASE)
-    return match.group(1) if match else None
+def call_llm(model, messages, temperature=0.5, max_tokens=300):
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    headers = {
+        "Authorization": f"Bearer {AI_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    response = requests.post(AI_URL, headers=headers, data=json.dumps(payload))
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"].strip()
 
-def detect_date(text):
-    match = re.search(r"(?:le|la)? ?(\d{1,2} [a-zéû]+(?: \d{4})?)", text, re.IGNORECASE)
-    return match.group(1) if match else None
+# Fonction pour générer le prompt et interroger le LLM
+def extract_slots_with_llm(user_input):
+    system_prompt = {
+        "role": "system",
+        "content": (
+            "Tu es un assistant intelligent chargé d'extraire des informations clés d'une phrase utilisateur. "
+            "Retourne uniquement un JSON valide contenant les champs suivants si disponibles : "
+            "intention, nom, date, lieu, produit,quantités. "
+            "Si un champ est absent, mets sa valeur à null."
+        )
+    }
+    user_prompt = {
+        "role": "user",
+        "content": f"Phrase utilisateur : {user_input}"
+    }
 
-def detect_lieu(text):
-    match = re.search(r"à ([A-Z][a-z]+)", text)
-    return match.group(1) if match else None
+    output = call_llm("mixtral", [system_prompt, user_prompt])
+    
+    # Tente de parser le JSON retourné
+    try:
+        return json.loads(output)
+    except json.JSONDecodeError:
+        print("⚠️ Erreur : le LLM n'a pas retourné un JSON valide. Réponse brute :")
+        print(output)
+        return {}
 
-def detect_produit(text):
-    match = re.search(r"(acheter|réserver|commander) un[e]? (\w+)", text)
-    return match.group(2) if match else None
-
-def detect_intention(text):
-    if "acheter" in text:
-        return "achat"
-    elif "réserver" in text:
-        return "réservation"
-    elif "annuler" in text:
-        return "annulation"
-    return "inconnue"
-
-# Interaction en boucle
-print("Bienvenue dans l'agent intelligent ! Tapez 'exit' pour quitter.")
-while True:
-    user_input = input("\nVotre requête : ").strip()
-    if user_input.lower() in ['exit', 'quit']:
-        break
-
-    # Extraction des slots
-    slots["nom"] = detect_nom(user_input) or slots["nom"]
-    slots["date"] = detect_date(user_input) or slots["date"]
-    slots["lieu"] = detect_lieu(user_input) or slots["lieu"]
-    slots["produit"] = detect_produit(user_input) or slots["produit"]
-    slots["intention"] = detect_intention(user_input) or slots["intention"]
-
-    # Affichage
-    print("\n🧠 Slots détectés :")
-    for key, value in slots.items():
-        print(f" - {key.capitalize()} : {value or 'Non détecté'}")
+# Boucle interactive
+if __name__ == "__main__":
+    print("=== Slot Filling avec LLM (tape 'exit' pour quitter) ===")
+    while True:
+        user_input = input("\nVotre requête : ").strip()
+        if user_input.lower() in ["exit", "quit"]:
+            break
+        slots = extract_slots_with_llm(user_input)
+        print("\n🎯 Slots détectés :")
+        for key in ["intention", "nom", "date", "lieu", "produit","quantités"]:
+            print(f" - {key.capitalize()} : {slots.get(key)}")
